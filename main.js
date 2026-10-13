@@ -3,7 +3,7 @@ const TYPE='exam-technique-handbook-view';
 const ROOT='技巧宝典';
 const id=()=>globalThis.crypto.randomUUID();
 function documentFor(kind,value){
-  const data={note_type:kind,entity_id:id(),teacher:value.teacher||'',parent_id:value.parent||'',source_note:value.source||'',question_note:value.question||'',evidence_role:value.role||'老师原讲解',trigger_tags:value.tags||[],reminder:value.reminder||'',review_status:value.review||'待复核',created_at:new Date().toISOString()};
+  const data={title:value.title,system_id:value.system||value.teacher||'',note_type:kind,entity_id:id(),teacher:value.teacher||'',parent_id:value.parent||'',source_note:value.source||'',question_note:value.question||'',evidence_role:value.role||'老师原讲解',trigger_tags:value.tags||[],reminder:value.reminder||'',review_status:value.review||'待复核',created_at:new Date().toISOString()};
   const yaml=Object.entries(data).map(([k,v])=>`${k}: ${JSON.stringify(v)}`).join('\n');
   let body;
   if(kind==='technique_analysis')body=`## 分析对象\n${value.question?'[['+value.question+']]':'待关联原题'}\n\n## 题干标注\n\n## 问题标注\n\n## 选项 A 标注\n\n## 选项 B 标注\n\n## 选项 C 标注\n\n## 选项 D 标注\n\n## 分析与应用\n${value.content||''}\n\n## 关联技巧\n`;
@@ -14,16 +14,16 @@ function documentFor(kind,value){
 }
 function safeTitle(title){return String(title||'').trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g,'-').replace(/[. ]+$/,'').slice(0,100);}
 class Create extends Modal{
-  constructor(app,plugin,kind,question=''){super(app);this.plugin=plugin;this.kind=kind;this.value={title:'',teacher:'',source:'',parent:'',question,role:'老师原讲解',content:'',tags:[],reminder:'',review:'待复核',sections:{}} ;}
+  constructor(app,plugin,kind,question=''){super(app);this.plugin=plugin;this.kind=kind;this.value={title:'',teacher:'',source:'',parent:'',question,role:'老师原讲解',content:'',tags:[],reminder:'',review:'待复核',system:'',sections:{}} ;}
   onOpen(){const el=this.contentEl;el.createEl('h2',{text:({technique_node:'新建技巧节点',technique_lecture:'记录完整讲义',technique_analysis:'记录本题分析'})[this.kind]});
-    for(const [key,label] of [['title','名称（必填）'],['teacher','老师'],['source','来源文件路径（MD / PDF）'],...(this.kind==='technique_analysis'?[['question','原题 MD 路径']]:[['parent','父技巧节点 ID（可选）']])])new Setting(el).setName(label).addText(t=>t.setValue(this.value[key]).onChange(v=>this.value[key]=v));
+    for(const [key,label] of [['title','名称（必填）'],['teacher','老师'],['system','体系名称（例如2025言语）'],['source','来源文件路径（MD / PDF）'],...(this.kind==='technique_analysis'?[['question','原题 MD 路径']]:[['parent','父技巧节点 ID（可选）']])])new Setting(el).setName(label).addText(t=>t.setValue(this.value[key]).onChange(v=>this.value[key]=v));
     new Setting(el).setName('内容归属').setDesc('明确区分来源，AI 建议不自动视为老师观点。').addDropdown(d=>d.addOptions({'老师原讲解':'老师原讲解','个人应用':'个人应用','AI建议':'AI建议'}).onChange(v=>this.value.role=v));
     if(this.kind==='technique_node'){
       new Setting(el).setName('触发标签（逗号分隔，精确匹配）').addText(t=>t.onChange(v=>this.value.tags=v.split(/[，,]/).map(x=>x.trim().replace(/^#/, '')).filter(Boolean)));
       new Setting(el).setName('技巧提醒').addTextArea(t=>t.onChange(v=>this.value.reminder=v));
       new Setting(el).setName('复核状态').addDropdown(d=>d.addOptions({'待复核':'待复核','已复核':'已复核'}).onChange(v=>this.value.review=v));
     }
-    if(this.kind==='technique_analysis')new Setting(el).setName('关联方法节点').addDropdown(d=>{d.addOption('','选择方法，可重复添加');this.plugin.entries().filter(x=>x.fm.note_type==='technique_node').forEach(x=>d.addOption(x.file.path,(x.fm.teacher||'未标老师')+' / '+x.file.basename));d.onChange(path=>{if(path)this.value.sections['关联技巧']=(this.value.sections['关联技巧']||'')+'\n[['+path+']]';});});
+    if(this.kind==='technique_analysis')new Setting(el).setName('关联方法节点').addDropdown(d=>{d.addOption('','选择方法，可重复添加');this.plugin.entries().filter(x=>x.fm.note_type==='technique_node').forEach(x=>d.addOption(x.file.path,(x.fm.teacher||'未标老师')+' / '+(x.fm.title||x.file.basename)));d.onChange(path=>{if(path)this.value.sections['关联技巧']=(this.value.sections['关联技巧']||'')+'\n[['+path+']]';});});
     if(this.kind==='technique_analysis')for(const title of ['题干标注','问题标注','选项 A 标注','选项 B 标注','选项 C 标注','选项 D 标注','关联技巧'])new Setting(el).setName(title).addTextArea(t=>t.onChange(v=>this.value.sections[title]=v));
     new Setting(el).setName('内容').addTextArea(t=>t.setPlaceholder('完整讲义、方法步骤或本题分析').onChange(v=>this.value.content=v));
     new Setting(el).addButton(b=>b.setButtonText('保存 Markdown').setCta().onClick(async()=>{b.setDisabled(true);try{await this.plugin.create(this.kind,this.value);this.close();}catch(e){new Notice(e.message);b.setDisabled(false);}}));
@@ -43,40 +43,48 @@ class HandbookView extends ItemView{
     const imp=el.createEl('button',{text:'导入层级文本'});imp.onclick=()=>new ImportArchitecture(this.app,this.plugin).open();
     this.list=el.createDiv();this.preview=el.createDiv({cls:'technique-preview'});this.renderList();
   }
-  renderList(){if(!this.list)return;this.list.empty();const entries=this.plugin.entries();const visible=entries.filter(x=>(!this.teacher||x.fm.teacher===this.teacher)&&(!this.kind||x.fm.note_type===this.kind)&&`${x.file.basename} ${x.fm.teacher||''}`.toLowerCase().includes(this.query.toLowerCase()));
+  renderList(){if(!this.list)return;this.list.empty();const entries=this.plugin.entries();const visible=entries.filter(x=>(!this.teacher||x.fm.teacher===this.teacher)&&(!this.kind||x.fm.note_type===this.kind)&&`${(x.fm.title||x.file.basename)} ${x.fm.teacher||''}`.toLowerCase().includes(this.query.toLowerCase()));
     if(!visible.length)this.list.createEl('p',{text:'暂无符合条件的内容。可以新建技巧，或从原题记录分析。'});
     if(this.mapMode){this.renderMap(visible);return;}
-    for(const entry of visible){const row=this.list.createDiv({cls:'technique-row'});const title=row.createEl('button',{text:entry.file.basename});title.onclick=()=>this.show(entry);row.createSpan({text:`${entry.fm.teacher||'未标老师'} · ${entry.fm.evidence_role||'待核对'}`,cls:'technique-muted'});
+    for(const entry of visible){const row=this.list.createDiv({cls:'technique-row'});const title=row.createEl('button',{text:(entry.fm.title||entry.file.basename)});title.onclick=()=>this.show(entry);row.createSpan({text:`${entry.fm.teacher||'未标老师'} · ${entry.fm.evidence_role||'待核对'}`,cls:'technique-muted'});
       if(entry.fm.parent_id){const parent=entries.find(x=>x.fm.entity_id===entry.fm.parent_id);row.createSpan({text:'上级：'+(parent?.file.basename||'父节点未找到'),cls:'technique-muted'});}
     }
   }
   renderMap(entries){
     this.list.addClass('technique-map');const nodes=entries.filter(x=>x.fm.note_type==='technique_node');const ids=new Set(nodes.map(x=>x.fm.entity_id));const children=new Map();for(const n of nodes){const key=n.fm.parent_id||'';if(!children.has(key))children.set(key,[]);children.get(key).push(n);}
-    const branch=(entry,parent,ancestors=new Set())=>{if(ancestors.has(entry.file.path))return;const chain=new Set(ancestors);chain.add(entry.file.path);const row=parent.createDiv({cls:'technique-map-branch'});const b=row.createEl('button',{text:entry.file.basename});b.onclick=()=>this.show(entry);const descendants=children.get(entry.fm.entity_id)||[];if(descendants.length){const box=row.createEl('details');box.createEl('summary',{text:'展开 '+descendants.length+' 个分支'});let loaded=false;box.addEventListener('toggle',()=>{if(!box.open||loaded)return;loaded=true;const content=box.createDiv({cls:'technique-map-children'});for(const n of descendants)branch(n,content,chain);});}}
+    const branch=(entry,parent,ancestors=new Set())=>{if(ancestors.has(entry.file.path))return;const chain=new Set(ancestors);chain.add(entry.file.path);const row=parent.createDiv({cls:'technique-map-branch'});const b=row.createEl('button',{text:(entry.fm.title||entry.file.basename)});b.onclick=()=>this.show(entry);const descendants=children.get(entry.fm.entity_id)||[];if(descendants.length){const box=row.createEl('details');box.createEl('summary',{text:'展开 '+descendants.length+' 个分支'});let loaded=false;box.addEventListener('toggle',()=>{if(!box.open||loaded)return;loaded=true;const content=box.createDiv({cls:'technique-map-children'});for(const n of descendants)branch(n,content,chain);});}}
     const roots=nodes.filter(x=>!ids.has(x.fm.parent_id));for(const n of roots)branch(n,this.list);if(nodes.length&&!roots.length)this.list.createEl('p',{text:'层级存在循环，请在原 Markdown 检查父节点关系。'});
   }
   async show(entry){const token=Symbol();this.previewToken=token;const text=await this.app.vault.read(entry.file);if(this.previewToken!==token)return;this.previewComponent?.unload();this.preview.empty();this.previewComponent=new Component();this.previewComponent.load();const button=this.preview.createEl('button',{text:'打开原 Markdown 编辑'});button.onclick=()=>this.app.workspace.openLinkText(entry.file.path,'','tab');if(entry.fm.note_type==='technique_node'){const config=this.preview.createEl('button',{text:'设置标签提醒'});config.onclick=()=>new ConfigureReminder(this.app,this.plugin,entry).open();}
     await MarkdownRenderer.render(this.app,text,this.preview,entry.file.path,this.previewComponent);}
 }
 class Handbook extends Plugin{
-  async importArchitecture(raw,teacher,source){
+  async importArchitecture(raw,teacher,source,system=teacher){
     const nodes=parseArchitecture(raw);if(!teacher.trim()||teacher==='待确认')throw Error('请确认老师名称。');
     if(source&&!this.app.vault.getAbstractFileByPath(source))throw Error('请选择已放入库内的 PDF 路径。');
     const existing=new Set(this.entries().map(x=>x.fm.entity_id));let count=0;
     const folder=ROOT+'/技巧';for(const f of [ROOT,folder])if(!await this.app.vault.adapter.exists(f))await this.app.vault.createFolder(f);
-    for(const n of nodes){const key=teacher.trim()+':'+n.id;if(existing.has(key))continue;
-      const path=folder+'/'+safeTitle(n.id)+'-'+encodeURIComponent(teacher.trim())+'.md';
+    for(const n of nodes){const prefix=teacher.trim()+':'+system.trim();const key=prefix+':'+n.id;if(existing.has(key))continue;
+      const path=folder+'/'+safeTitle(n.id)+'-'+encodeURIComponent(teacher.trim()+':'+system.trim())+'.md';
       if(await this.app.vault.adapter.exists(path))continue;
-      let doc=documentFor('technique_node',{title:n.title,teacher:teacher.trim(),source,content:n.body,tags:n.tags,reminder:n.reminder,review:n.review});
-      doc=doc.replace(/^entity_id:.*$/m,'entity_id: '+JSON.stringify(key)).replace(/^parent_id:.*$/m,'parent_id: '+JSON.stringify(n.parent?teacher.trim()+':'+n.parent:''));
+      let doc=documentFor('technique_node',{title:n.title,teacher:teacher.trim(),system,source,content:n.body,tags:n.tags,reminder:n.reminder,review:n.review});
+      doc=doc.replace(/^entity_id:.*$/m,'entity_id: '+JSON.stringify(key)).replace(/^parent_id:.*$/m,'parent_id: '+JSON.stringify(n.parent?prefix+':'+n.parent:''));
       doc=doc.replace(/^source_note:.*$/m,match=>match+'\nsource_page: '+JSON.stringify(n.page));
       await this.app.vault.create(path,doc);existing.add(key);count++;}
     return count;
   }
   reminders(tags,teacher=''){const norm=x=>String(x).replace(/^#/,'').trim();const set=new Set(tags.map(norm));return this.entries().filter(x=>x.fm.note_type==='technique_node'&&x.fm.review_status==='已复核'&&(!teacher||x.fm.teacher===teacher)&&(Array.isArray(x.fm.trigger_tags)?x.fm.trigger_tags:[]).some(t=>set.has(norm(t)))&&x.fm.reminder);}
+
+  methodsFor(tags){const norm=v=>String(v).trim().replace(/^#/,'');const set=new Set(tags.map(norm));const nodes=this.entries().filter(x=>x.fm.note_type==='technique_node');const byId=new Map(nodes.map(x=>[x.fm.entity_id,x]));return nodes.filter(entry=>{let n=entry;const seen=new Set();while(n&&!seen.has(n.file.path)){seen.add(n.file.path);if((n.fm.trigger_tags||[]).some(t=>set.has(norm(t))))return true;n=byId.get(n.fm.parent_id);}return false;});}
+  async saveMatch(question,entry,section,pattern,quote,notes){
+    const root=ROOT+'/题目分析';if(!await this.app.vault.adapter.exists(root))await this.app.vault.createFolder(root);
+    const system=entry.fm.system_id||entry.fm.teacher||'未标体系';const key=question.path+'|'+entry.fm.teacher+'|'+system;let hash=2166136261;for(const c of key){hash^=c.charCodeAt(0);hash=Math.imul(hash,16777619);}const path=root+'/匹配-'+(hash>>>0).toString(16)+'.md';
+    const block='\n## '+section+'\n方法：[['+entry.file.path+']]\n典型类别：'+pattern+'\n原文片段：'+quote+'\n复核说明：'+notes+'\n内容归属：个人应用\n';
+    const file=this.app.vault.getAbstractFileByPath(path);if(file)await this.app.vault.process(file,latest=>latest+block);else await this.app.vault.create(path,'---\nnote_type: technique_analysis\nquestion_note: '+JSON.stringify(question.path)+'\nteacher: '+JSON.stringify(entry.fm.teacher||'')+'\nsystem_id: '+JSON.stringify(system)+'\nevidence_role: "个人应用"\n---\n# '+question.name+' · '+system+'\n'+block);
+  }
   createQuestionAnalysis(question){new Create(this.app,this,'technique_analysis',question).open();}
   async onload(){this.registerView(TYPE,l=>new HandbookView(l,this));this.addRibbonIcon('book-open','技巧宝典',()=>this.open());this.addCommand({id:'open',name:'打开技巧宝典',callback:()=>this.open()});this.addCommand({id:'analyze-current',name:'记录当前题目的技巧分析',callback:()=>new Create(this.app,this,'technique_analysis',this.app.workspace.getActiveFile()?.path||'').open()});this.entries();this.registerEvent(this.app.vault.on('delete',file=>this.entryIndex.delete(file.path)));this.registerEvent(this.app.vault.on('rename',(file,old)=>{this.entryIndex.delete(old);this.updateIndex(file);}));this.registerEvent(this.app.metadataCache.on('changed',file=>{this.updateIndex(file);clearTimeout(this.indexRefreshTimer);this.indexRefreshTimer=setTimeout(()=>{for(const leaf of this.app.workspace.getLeavesOfType(TYPE))leaf.view.renderList();},200);}));}
-  updateIndex(file){if(!file?.path)return;this.entryIndex ||=new Map();this.entryIndex.delete(file.path);if(file.extension!=='md')return;const fm=this.app.metadataCache.getFileCache(file)?.frontmatter||{};if(['technique_node','technique_lecture','technique_analysis'].includes(fm.note_type))this.entryIndex.set(file.path,{file,fm});}
+  updateIndex(file){if(!file?.path)return;this.entryIndex ||=new Map();this.entryIndex.delete(file.path);if(file.extension!=='md')return;const fm={...(this.app.metadataCache.getFileCache(file)?.frontmatter||{})};const heading=this.app.metadataCache.getFileCache(file)?.headings?.find(h=>h.level===1);if(!fm.title&&heading)fm.title=heading.heading;if(['technique_node','technique_lecture','technique_analysis'].includes(fm.note_type))this.entryIndex.set(file.path,{file,fm});}
   entries(){if(!this.entryIndex){this.entryIndex=new Map();for(const file of this.app.vault.getMarkdownFiles())this.updateIndex(file);}return [...this.entryIndex.values()];}
   async create(kind,value){const title=safeTitle(value.title);if(!title)throw Error('请填写名称。');if(value.question&&!this.app.vault.getAbstractFileByPath(value.question))throw Error('原题路径不存在，请填写库内完整路径。');if(value.source&&!this.app.vault.getAbstractFileByPath(value.source))throw Error('来源文件不存在。');if(value.parent&&!this.entries().some(x=>x.fm.entity_id===value.parent&&x.fm.note_type==='technique_node'))throw Error('找不到父技巧节点 ID。');
     const folder=ROOT+'/'+({technique_node:'技巧',technique_lecture:'讲义',technique_analysis:'题目分析'})[kind];for(const p of [ROOT,folder])if(!await this.app.vault.adapter.exists(p))await this.app.vault.createFolder(p);
@@ -89,10 +97,11 @@ class Handbook extends Plugin{
 
 class ConfigureReminder extends Modal{
  constructor(app,plugin,entry){super(app);this.plugin=plugin;this.entry=entry;}
- onOpen(){const el=this.contentEl,fm=this.app.metadataCache.getFileCache(this.entry.file)?.frontmatter||{};let tags=Array.isArray(fm.trigger_tags)?fm.trigger_tags:[],reminder=fm.reminder||'',review=fm.review_status||'待复核';el.createEl('h3',{text:'设置技巧提醒'});
+ onOpen(){const el=this.contentEl,fm=this.app.metadataCache.getFileCache(this.entry.file)?.frontmatter||{};let tags=Array.isArray(fm.trigger_tags)?fm.trigger_tags:[],reminder=fm.reminder||'',review=fm.review_status||'待复核';let keywords=fm.keywords||'',correct=fm.correct_patterns||'',wrong=fm.wrong_patterns||'';el.createEl('h3',{text:'设置技巧提醒'});
  new Setting(el).setName('触发标签（精确匹配，逗号分隔）').addText(t=>t.setValue(tags.join(',')).onChange(v=>tags=v.split(/[，,]/).map(x=>x.trim().replace(/^#/, '')).filter(Boolean)));
+ for(const [label,val,save] of [['关键词 / 线索（支持 [[双链]]）',keywords,v=>keywords=v],['典型正确选项（每行一类）',correct,v=>correct=v],['典型错误选项（每行一类）',wrong,v=>wrong=v]])new Setting(el).setName(label).addTextArea(t=>t.setValue(val).onChange(save));
  new Setting(el).setName('提醒内容（个人配置）').addTextArea(t=>t.setValue(reminder).onChange(v=>reminder=v));new Setting(el).setName('复核状态').addDropdown(d=>d.addOptions({'待复核':'待复核','已复核':'已复核'}).setValue(review).onChange(v=>review=v));
- new Setting(el).addButton(b=>b.setButtonText('保存设置').onClick(async()=>{b.setDisabled(true);try{await this.app.fileManager.processFrontMatter(this.entry.file,f=>{f.trigger_tags=tags;f.reminder=reminder;f.review_status=review;});this.close();}catch(e){new Notice(e.message);b.setDisabled(false);}}));}
+ new Setting(el).addButton(b=>b.setButtonText('保存设置').onClick(async()=>{b.setDisabled(true);try{await this.app.fileManager.processFrontMatter(this.entry.file,f=>{f.trigger_tags=tags;f.reminder=reminder;f.review_status=review;f.keywords=keywords;f.correct_patterns=correct;f.wrong_patterns=wrong;});this.close();}catch(e){new Notice(e.message);b.setDisabled(false);}}));}
 }
 
 function parseArchitecture(raw){
@@ -104,10 +113,10 @@ function parseArchitecture(raw){
  if(!nodes.length)throw Error('没有找到 ## 开始的层级标题。');const ids=new Set();for(const n of nodes){if(!n.id){const ancestry=[];let a=n;while(a){ancestry.unshift(a.title);a=a.parentNode;}const key=ancestry.join('/');let hash=2166136261;for(const char of key){hash^=char.charCodeAt(0);hash=Math.imul(hash,16777619);}n.id='md-'+(hash>>>0).toString(16);}if(ids.has(n.id))throw Error('重复 node-id：'+n.id);ids.add(n.id);n.parent=n.parentNode?.id||'';n.body=n.lines.join('\n').trim();delete n.parentNode;}return nodes;
 }
 class ImportArchitecture extends Modal{
- constructor(app,plugin){super(app);this.plugin=plugin;this.raw='';this.teacher='';this.source='';}
+ constructor(app,plugin){super(app);this.plugin=plugin;this.raw='';this.teacher='';this.source='';this.system='';}
  onOpen(){const el=this.contentEl;el.createEl('h2',{text:'导入复核后的方法体系'});el.createEl('p',{text:'粘贴层级 Markdown，先预览。相同 node-id 已存在时跳过，不覆盖原内容；待复核节点不会触发提醒。'});
- new Setting(el).setName('老师').addText(t=>t.onChange(v=>this.teacher=v));new Setting(el).setName('来源库内路径（可选）').addText(t=>t.onChange(v=>this.source=v));new Setting(el).setName('层级文本').addTextArea(t=>t.onChange(v=>this.raw=v));const preview=el.createDiv();let validated='';const save=el.createEl('button',{text:'确认导入'});save.disabled=true;const check=el.createEl('button',{text:'预览层级'});check.onclick=()=>{try{const nodes=parseArchitecture(this.raw);preview.empty();nodes.forEach(n=>preview.createEl('p',{text:'　'.repeat(Math.max(0,n.level-1))+n.title+' · '+n.review}));validated=this.raw;save.disabled=false;}catch(e){new Notice(e.message);}};
- save.onclick=async()=>{save.disabled=true;try{if(validated!==this.raw)throw Error('文本已改变，请重新预览。');const count=await this.plugin.importArchitecture(this.raw,this.teacher,this.source);new Notice('导入 '+count+' 个节点；已有节点保留。');this.close();}catch(e){new Notice(e.message);save.disabled=false;}};
+ new Setting(el).setName('老师').addText(t=>t.onChange(v=>this.teacher=v));new Setting(el).setName('体系名称（必填）').addText(t=>t.onChange(v=>this.system=v));new Setting(el).setName('来源库内路径（可选）').addText(t=>t.onChange(v=>this.source=v));new Setting(el).setName('层级文本').addTextArea(t=>t.onChange(v=>this.raw=v));const preview=el.createDiv();let validated='';const save=el.createEl('button',{text:'确认导入'});save.disabled=true;const check=el.createEl('button',{text:'预览层级'});check.onclick=()=>{try{const nodes=parseArchitecture(this.raw);preview.empty();nodes.forEach(n=>preview.createEl('p',{text:'　'.repeat(Math.max(0,n.level-1))+n.title+' · '+n.review}));validated=this.raw;save.disabled=false;}catch(e){new Notice(e.message);}};
+ save.onclick=async()=>{save.disabled=true;try{if(validated!==this.raw)throw Error('文本已改变，请重新预览。');if(!this.system.trim())throw Error('请填写体系名称。');const count=await this.plugin.importArchitecture(this.raw,this.teacher,this.source,this.system);new Notice('导入 '+count+' 个节点；已有节点保留。');this.close();}catch(e){new Notice(e.message);save.disabled=false;}};
  }
 }
 
