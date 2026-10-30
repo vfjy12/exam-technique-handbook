@@ -1,9 +1,9 @@
 {
   "id": "exam-technique-handbook",
   "name": "考公技巧宝典",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "minAppVersion": "1.6.0",
-  "description": "老师方法体系、讲义来源、技巧节点与原题分析。",
+  "description": "按模块与老师维护方法导图、题干/问题/选项分析、关键词和个人蒙题归档。",
   "author": "Codex",
   "isDesktopOnly": false
 }
